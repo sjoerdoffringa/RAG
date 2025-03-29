@@ -42,7 +42,7 @@ def generate_response(input_text):
     st.info(response['answer'])
 
 with st.form("my_form"):
-    text = st.text_area("Enter text:", "What is the Guidance Framework?")
+    text = st.text_area("Enter text:", "What are the responsibilities of a scrum master?")
     submitted = st.form_submit_button("Submit")
     if submitted:
         generate_response(text)

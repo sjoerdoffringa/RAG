@@ -1,0 +1,6 @@
+data_path="./data/papers/"
+embedding_path="./embeddings/papers/"
+
+GOOGLE_API_KEY="..."
+MISTRAL_API_KEY="..."
+OPENAI_API_KEY="..."

@@ -1,4 +1,4 @@
-from . import utils
+from .utils import pdf_to_text, txt_to_text
 import os
 import numpy as np
 import json

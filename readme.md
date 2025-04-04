@@ -8,6 +8,10 @@
 2. Install project dependencies:
    ```poetry install```
 
+## Initialization
+
+1. Copy the ```.env template``` file as ```.env``` and insert at least one API key.
+
 ## Running the UI
 
 Start the Streamlit application with:

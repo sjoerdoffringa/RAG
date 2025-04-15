@@ -1,20 +1,28 @@
 from .utils import pdf_to_text, txt_to_text
 import os
+from typing import List
 import numpy as np
 import json
 import faiss
+import pickle
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from rerankers import Reranker
 from langchain.chat_models import init_chat_model
 
+from sklearn.metrics.pairwise import cosine_similarity
+
+from nltk.tokenize import word_tokenize
+from rank_bm25 import BM25Okapi
+
 
 class Embedder:
     """Handles file loading, chunking and text embedding and storing embeddings in FAISS & JSON."""
     
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, normalize_embeddings: bool = True):
         self.model = SentenceTransformer(model_name)
         self.dim = self.model.get_sentence_embedding_dimension()
+        self.normalize_embeddings = normalize_embeddings
         self.data_path = os.getenv("data_path", "")
         self.vector_embedding_path = os.getenv("embedding_path", "") + 'chunk_vectors.faiss'
         self.chunkdata_path = os.getenv("embedding_path", "") + 'chunk_data.json'
@@ -84,7 +92,7 @@ class Embedder:
 
     def encode(self, texts: list[str]) -> np.ndarray:
         """Returns vector embeddings for a list of texts."""
-        return self.model.encode(texts, convert_to_numpy=True)
+        return self.model.encode(texts, convert_to_numpy=True, normalize_embeddings=self.normalize_embeddings)
     
     def _init_index(self):
         """Creates FAISS index and stores it in the vector_embedding_path."""
@@ -108,7 +116,7 @@ class Embedder:
     def _load_chunkdata(self):
         """Loads chunk data from JSON file if it exists; otherwise, returns an empty list."""
         try:
-            with open(self.chunkdata_path, "r") as f:
+            with open(self.chunkdata_path, "r", encoding="utf-8") as f:
                 self.chunkdata = json.load(f)
         except json.JSONDecodeError:
             pass
@@ -123,16 +131,56 @@ class Embedder:
         query_vector = self.encode([query_text])
         distances, indices = self.index.search(query_vector, top_k)
         return distances, indices
-    
+
+class hybridEmbedder(Embedder):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.bm25 = None
+        self.corpus = None
+
+    def _tokenize(self, text: str) -> List[str]:
+        """Tokenizes and lowercases text consistently for both corpus and queries."""
+        return word_tokenize(text.lower())
+
+    def _build_corpus(self):
+        """Tokenizes the corpus for BM25."""
+        self.corpus = [self._tokenize(chunk['text']) for chunk in self.chunkdata]
+
+    def _build_bm25(self):
+        """Initializes BM25 from tokenized corpus."""
+        self._build_corpus()
+        self.bm25 = BM25Okapi(self.corpus)
+
+    def search_bm25(self, query: str, top_k: int = 3) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Performs a BM25-based search and returns:
+        - distances: array of BM25 scores (float)
+        - indices: array of corresponding indices into the corpus
+        """
+        if self.bm25 is None:
+            self._build_bm25()
+
+        tokens = self._tokenize(query)
+        scores = self.bm25.get_scores(tokens)
+
+        top_indices = np.argsort(scores)[::-1][:top_k]
+        top_scores = scores[top_indices]
+
+        return np.array(top_scores), np.array(top_indices)
+
 class RAG:
     def __init__(self,
-                 embedding_model_name="all-MiniLM-L6-v2", LLM_name="openai:gpt-4o-mini",
+                 embedding_model_name="all-MiniLM-L6-v2", normalize_embeddings=True,
+                 hybrid_embedder=False,
+                 LLM_name="openai:gpt-4o-mini",
                  reranker_name="flashrank", use_reranker=True,
-                 retrieve_top_k=15, rerank_top_k=3):       
-        self.data_path = os.getenv("data_path")
-        self.vector_embedding_path = os.getenv("vector_embedding_path")
+                 retrieve_top_k=15, rerank_top_k=3,
+                 in_scope=False):
         
-        self.embedder = Embedder(embedding_model_name)
+        if hybrid_embedder:
+            self.embedder = hybridEmbedder(embedding_model_name, normalize_embeddings=normalize_embeddings)
+        else:    
+            self.embedder = Embedder(embedding_model_name, normalize_embeddings=normalize_embeddings)
         self.use_reranker = use_reranker
         self.reranker = Reranker(reranker_name) if use_reranker else None
         self.LLM = init_chat_model(LLM_name)
@@ -140,9 +188,16 @@ class RAG:
         self.retrieve_top_k = retrieve_top_k
         self.rerank_top_k = rerank_top_k
 
+        self.in_scope = in_scope
+        self.in_scope_model = None
+        if in_scope:
+            self.in_scope_model_path = os.getenv("embedding_path", "") + 'model.pkl'
+            with open(self.in_scope_model_path, 'rb') as f:
+                self.in_scope_model = pickle.load(f)
+
     def reload_embeddings(self, chunk_size=500, chunk_overlap=50):
         # check if data path contains files
-        if len(os.listdir(self.data_path)) == 0:
+        if len(os.listdir(self.embedder.data_path)) == 0:
             print("No files found in data_path.")
             return
         
@@ -208,7 +263,13 @@ class RAG:
             "chunks": chunks,
             "query": query,
             "answer": answer
-        }	
+        }
+
+        if self.in_scope:
+            best_chunk = chunks[0]
+            features = [best_chunk['score']]
+            prediction = self.in_scope_model.predict(np.array(features).reshape(1, -1))[0]
+            response["in_scope"] = prediction
 
         return response
     
@@ -218,3 +279,31 @@ class RAG:
     
     def print_chunk(self, id):
         print(self.embedder.chunkdata[id]['text'])
+
+class explainaRAG(RAG):
+    """
+    This class extends the RAG class with explanation methods.
+    """
+
+    def __init__(self, *args, **kwargs):
+        """
+        Initializes the explainaRAG instance with the provided arguments.
+        """
+        super().__init__(*args, **kwargs)
+
+    def is_in_scope(self, query, threshold=0.5):
+        n_chunks = self.embedder.index.ntotal
+        n_dims = self.embedder.dim
+        
+        document_vectors = np.zeros((n_chunks, n_dims), dtype=np.float32)
+        for i in range(n_chunks):
+            document_vectors[i] = self.embedder.index.reconstruct(i)
+        query_vector = self.embedder.encode(query).reshape(1, -1)
+        similarities = cosine_similarity(query_vector, document_vectors)
+        
+        max_sim = np.max(similarities)  # Highest similarity score
+        if max_sim > threshold:
+            return True, max_sim
+        else:
+            return False, max_sim
+        

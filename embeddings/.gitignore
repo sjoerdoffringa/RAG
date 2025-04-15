@@ -4,3 +4,5 @@
 !.gitignore
 !papers/
 !papers/*
+!ELOQ_news
+!ELOQ_news/*

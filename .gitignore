@@ -1,2 +1,3 @@
 /.env
 /.flashrank_cache
+/mlruns/

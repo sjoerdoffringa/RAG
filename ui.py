@@ -48,6 +48,8 @@ def render_chunk(i, chunk, show_scores):
 def generate_response(input_text):
     response = rag.query(input_text)
 
+    # TODO log response
+
     for i, chunk in enumerate(response['chunks']):
         render_chunk(i, chunk, show_scores)
 

@@ -1,8 +1,2 @@
-# Ignore everything in this directory
-*
-# Except this file
-!.gitignore
-!papers/
-!papers/*
-!ELOQ_news
-!ELOQ_news/*
+guidance_framework/
+guidance_framework_2/

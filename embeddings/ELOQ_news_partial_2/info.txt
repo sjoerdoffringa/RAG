@@ -1,0 +1,2 @@
+News articles of category food, music and tech are excluded.
+Other categories are included/excluded 50/50.

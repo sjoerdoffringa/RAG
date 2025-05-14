@@ -1,4 +1,4 @@
-from .utils import pdf_to_text, txt_to_text
+from .utils import pdf_to_text, txt_to_text, filter_citations
 from .prompts import prompts
 
 import os
@@ -177,7 +177,7 @@ class RAG:
                  LLM_name="openai:gpt-4o-mini",
                  reranker_name="flashrank", use_reranker=True,
                  retrieve_top_k=15, rerank_top_k=3,
-                 scope_model_id=None):
+                 explanation = 'SD', scope_model_id=None):
         
         self.embedder = hybridEmbedder(embedding_model_name, normalize_embeddings=normalize_embeddings)
         self.use_reranker = use_reranker
@@ -187,11 +187,19 @@ class RAG:
         self.retrieve_top_k = retrieve_top_k
         self.rerank_top_k = rerank_top_k
 
+        self.explanation = explanation
         self.scope_model_id = scope_model_id
         self.scope_model = None
         self.scope_features = []
-        if scope_model_id is not None:
-            self._load_scope_model()
+
+        if explanation == "SD":
+            try:
+                self._load_scope_model()
+            except Exception as e:
+                print(f"Error loading scope model: {e}")
+                self.explanation = None
+                self.scope_model = None
+                self.scope_features = []
 
     def _load_scope_model(self):
         # Construct the model URI
@@ -270,7 +278,7 @@ class RAG:
             chunklist = [chunk["text"] for chunk in chunks]
 
         if prompt == "self-citation":
-            chunklist = [f'[{i}] {doc}' for i, doc in enumerate(chunklist)]
+            chunklist = [f'[{i+1}] {doc}' for i, doc in enumerate(chunklist)]
 
         joined_chunks = " ".join(chunklist)
         formatted_prompt = prompts[prompt].format(joined_chunks=joined_chunks, query=query)
@@ -292,8 +300,11 @@ class RAG:
                 features.append(best_chunk['distance'])
             else:
                 raise ValueError(f"Unknown feature: {f}")
-        print(f"Features for scope prediction: {features}")
         prediction = self.scope_model.predict(np.array(features).reshape(1, -1))[0]
+
+        if prediction == 2 and best_chunk['score'] > 0.4:
+            prediction = 1
+
         return prediction
     
     def query_LLM(self, query):
@@ -312,17 +323,18 @@ class RAG:
 
         prompt_format = "vanilla-rag"
 
-        # predict if query falls within the scope of the database
-        if self.scope_model is not None:
+        if self.explanation == "SD":
             scope_pred = self.predict_scope(chunks, query)
             response["scope_prediction"] = scope_pred
 
             if scope_pred == 0:
                 prompt_format = "self-citation"
-            else:
+            elif scope_pred == 1:
                 counterfactual_prompt = self._format_prompt(query, chunks, prompt="counterfactual")
                 counterfactual_response = self.query_LLM(counterfactual_prompt)
                 response["counterfactual"] = counterfactual_response          
+        elif self.explanation == "SA":
+            prompt_format = "self-citation"
 
         # query the LLM
         prompt = self._format_prompt(query, chunks, prompt=prompt_format)
@@ -330,7 +342,47 @@ class RAG:
         response["answer"] = answer
 
         return response
+    
+    def query_2(self, query):
+        # get relevant chunks
+        chunks = self.retrieve(query)
 
+        # format the response
+        response = {
+            "chunks": chunks,
+            "query": query,
+        }
+
+        # query the LLM
+        prompt_format = "self-citation"
+        prompt = self._format_prompt(query, chunks, prompt=prompt_format)
+        answer = self.query_LLM(prompt)
+
+        if self.explanation == "SD":
+            # predict scope
+            scope_pred = self.predict_scope(chunks, query)
+            response["scope_prediction"] = scope_pred
+
+            if scope_pred == 0:
+                print("Relevant documents found")
+            else:
+                if scope_pred == 1:
+                    print("Related documents found")
+
+                    # generate counterfactual
+                    counterfactual_prompt = self._format_prompt(query, chunks, prompt="counterfactual")
+                    counterfactual_response = self.query_LLM(counterfactual_prompt)
+                    response["counterfactual"] = counterfactual_response
+                else:
+                    print("No relevant documents found")
+
+                answer = filter_citations(answer)
+        elif self.explanation == None:
+            answer = filter_citations(answer)
+
+        response["answer"] = answer
+
+        return response
     
     def print_chunk(self, id):
         print(self.embedder.chunkdata[id]['text'])

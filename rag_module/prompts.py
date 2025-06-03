@@ -10,6 +10,17 @@ prompts = {
     {query}
     """,
 
+    "vanilla-self-citation":
+    """
+    You are an AI assistant. Use the following retrieved documents to answer the question and cite them properly using [1][2][3].
+
+    Documents:
+    {joined_chunks}
+
+    Question:
+    {query}
+    """,
+
     "self-citation":
     """
     Write a high-quality answer for the given question using the provided documents and cite them properly using [1][2][3].

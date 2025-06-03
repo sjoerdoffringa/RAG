@@ -301,11 +301,13 @@ class RAG:
             else:
                 raise ValueError(f"Unknown feature: {f}")
         prediction = self.scope_model.predict(np.array(features).reshape(1, -1))[0]
+        probabilities = self.scope_model.predict_proba(np.array(features).reshape(1, -1))[0]
+        
 
         if prediction == 2 and best_chunk['score'] > 0.4:
             prediction = 1
 
-        return prediction
+        return prediction, probabilities
     
     def query_LLM(self, query):
         response = self.LLM.invoke(query).content
@@ -324,8 +326,9 @@ class RAG:
         prompt_format = "vanilla-rag"
 
         if self.explanation == "SD":
-            scope_pred = self.predict_scope(chunks, query)
+            scope_pred, scope_prob = self.predict_scope(chunks, query)
             response["scope_prediction"] = scope_pred
+            response["scope_probabilities"] = scope_prob
 
             if scope_pred == 0:
                 prompt_format = "self-citation"
@@ -334,52 +337,11 @@ class RAG:
                 counterfactual_response = self.query_LLM(counterfactual_prompt)
                 response["counterfactual"] = counterfactual_response          
         elif self.explanation == "SA":
-            prompt_format = "self-citation"
+            prompt_format = "vanilla-self-citation"
 
         # query the LLM
         prompt = self._format_prompt(query, chunks, prompt=prompt_format)
         answer = self.query_LLM(prompt)
-        response["answer"] = answer
-
-        return response
-    
-    def query_2(self, query):
-        # get relevant chunks
-        chunks = self.retrieve(query)
-
-        # format the response
-        response = {
-            "chunks": chunks,
-            "query": query,
-        }
-
-        # query the LLM
-        prompt_format = "self-citation"
-        prompt = self._format_prompt(query, chunks, prompt=prompt_format)
-        answer = self.query_LLM(prompt)
-
-        if self.explanation == "SD":
-            # predict scope
-            scope_pred = self.predict_scope(chunks, query)
-            response["scope_prediction"] = scope_pred
-
-            if scope_pred == 0:
-                print("Relevant documents found")
-            else:
-                if scope_pred == 1:
-                    print("Related documents found")
-
-                    # generate counterfactual
-                    counterfactual_prompt = self._format_prompt(query, chunks, prompt="counterfactual")
-                    counterfactual_response = self.query_LLM(counterfactual_prompt)
-                    response["counterfactual"] = counterfactual_response
-                else:
-                    print("No relevant documents found")
-
-                answer = filter_citations(answer)
-        elif self.explanation == None:
-            answer = filter_citations(answer)
-
         response["answer"] = answer
 
         return response

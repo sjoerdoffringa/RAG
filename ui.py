@@ -13,11 +13,13 @@ st.title("What can I help with?")
 
 # add toggle button to set RAG explanation to SD, SA or None
 #st.markdown("### RAG explanation")
-rag_explanation = st.selectbox("Explanation method:", ["Scope Detection", "Source Attribution", "None"])
+rag_explanation = st.selectbox("Explanation method:", ["Scope Detection", "Source Attribution", "Default RAG", "Default LLM"])
 if rag_explanation == "Scope Detection":
     rag.explanation = "SD"
 elif rag_explanation == "Source Attribution":
     rag.explanation = "SA"
+elif rag_explanation == "Default LLM":
+    show_sidebar = False
 else:
     rag.explanation = None
 
@@ -34,8 +36,8 @@ elif rag_LLM == "gemini-2.0-flash":
 if show_sidebar:
     sidebar = st.sidebar
     sidebar.title("Documents")
-    show_scores = sidebar.checkbox("Relevance scores", value=False)
-    sidebar.markdown("---")
+    show_scores = False #sidebar.checkbox("Relevance scores", value=False)
+    #sidebar.markdown("---")
 else:
     # Fallback if sidebar is hidden
     show_scores = False
@@ -64,19 +66,24 @@ def render_chunk(i, chunk, show_scores):
                 st.write(text)
 
 def generate_response(input_text):
-    response = rag.query(input_text)
+    if rag_explanation == "Default LLM":
+        response = {}
+        response["answer"] = rag.query_LLM(input_text)
+    else:
 
-    # check if scope prediction exists in response
-    if 'scope_prediction' in response:
-        if response['scope_prediction'] == 0:
-            st.success("Relevant documents found")
-        elif response['scope_prediction'] == 1:
-            st.warning(f'Would you like to ask: {response['counterfactual']}')
-        else:
-            st.error("No relevant documents found")
+        response = rag.query(input_text)
 
-    for i, chunk in enumerate(response['chunks']):
-        render_chunk(i, chunk, show_scores)
+        # check if scope prediction exists in response
+        if 'scope_prediction' in response:
+            if response['scope_prediction'] == 0:
+                st.success("Relevant documents found")
+            elif response['scope_prediction'] == 1:
+                st.warning(f'Would you like to ask: {response['counterfactual']}')
+            else:
+                st.error("No relevant documents found")
+
+        for i, chunk in enumerate(response['chunks']):
+            render_chunk(i, chunk, show_scores)
 
     st.info(response['answer'])
 
